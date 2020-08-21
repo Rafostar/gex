@@ -2,7 +2,7 @@ const { Gio, GLib, Soup } = imports.gi;
 const ByteArray = imports.byteArray;
 
 const NAME = 'gex';
-const VERSION = '0.0.1';
+const VERSION = '0.0.2';
 
 const TEMP_DIR = GLib.get_tmp_dir() + '/' + NAME;
 const GIT_RAW = `https://raw.githubusercontent.com`;
@@ -38,6 +38,8 @@ var Downloader = class
     constructor()
     {
         this.activeDownloads = 0;
+        this.modulesDownloads = 0;
+
         this.mainPath = null;
         this.lastSaveDir = null;
         this.hadError = false;
@@ -52,10 +54,32 @@ var Downloader = class
         });
     }
 
-    updateCheck()
+    run()
     {
-        this._updateCheck();
-        this.loop.run();
+        if(!this.mainPath)
+            return;
+
+        if(imports.searchPath[0] !== TEMP_DIR) {
+            imports.searchPath.unshift(TEMP_DIR);
+            debug(`added ${NAME} dir to search path: ${TEMP_DIR}`);
+        }
+
+        debug(`importing: ${this.mainPath}`);
+        let path = this.mainPath.substring(0, this.mainPath.indexOf('.js'));
+        path = path.split('/');
+
+        let mainImport = imports;
+        for(let subPath of path) {
+            if(mainImport[subPath])
+                mainImport = mainImport[subPath];
+        }
+
+        debug(`successfully imported: ${this.mainPath}`);
+        if(!mainImport.main || typeof mainImport.main !== 'function')
+            return debug('module does not have main function');
+
+        debug('starting main function...');
+        mainImport.main();
     }
 
     downloadModule(opts)
@@ -64,6 +88,7 @@ var Downloader = class
             opts.repo = `${GEX_OWNER}/opts.repo`;
 
         this._downloadModule(opts)
+            .then(() => this.modulesDownloads--)
             .catch(err => this._onUnrecoverableError(err));
 
         this.loop.run();
@@ -71,8 +96,16 @@ var Downloader = class
         return !this.hadError;
     }
 
+    updateCheck()
+    {
+        this._updateCheck();
+        this.loop.run();
+    }
+
     async _downloadModule(opts)
     {
+        this.modulesDownloads++;
+
         let defaults = {
             name: null,
             repo: null,
@@ -93,7 +126,8 @@ var Downloader = class
         }
 
         let gexjson;
-        let importDir = `${TEMP_DIR}/${opts.repo}/${opts.version}`;
+        let modulePath = `${opts.repo}/${opts.version}`;
+        let importDir = `${TEMP_DIR}/${modulePath}`;
         let downloadDir = `${importDir}/${opts.name}`;
         let savePath = `${downloadDir}/${GEX_JSON}`;
         let downloadSrc = (opts.src)
@@ -103,7 +137,7 @@ var Downloader = class
         let gioFile = Gio.file_new_for_path(`${importDir}/${GEX_JSON}`);
         if(gioFile.query_exists(null)) {
             debug(`found downloaded ${GEX_JSON} for "${opts.name}" module`);
-            gexjson = this._readFileJSON(gioFile);
+            gexjson = await this._readFile(gioFile, true).catch(debug);
         }
         if(!gexjson) {
             gexjson = await this._download({
@@ -113,14 +147,15 @@ var Downloader = class
 
             if(gexjson) {
                 this._makeDirForFile(`${importDir}/${GEX_JSON}`);
-                this._saveFileJSON(gexjson, gioFile);
+                await this._saveFile(gexjson, gioFile, true)
+                    .catch(err => this._onUnrecoverableError(err));
             }
         }
 
         if(!gexjson)
-            throw new Error(`could not obtain ${GEX_JSON}`);
+            throw new Error(`could not obtain ${GEX_JSON} for "${opts.name}" module`);
 
-        debug(`successfully obtained ${GEX_JSON}`);
+        debug(`successfully obtained ${GEX_JSON} for "${opts.name}" module`);
 
         if(Array.isArray(gexjson)) {
             gexjson = (opts.name)
@@ -134,33 +169,23 @@ var Downloader = class
             if(!gexjson.main)
                 throw new Error(`module "${opts.name}" is not a runnable app`);
             else
-                this.mainPath = `${gexjson.name}/${gexjson.main}`;
+                this.mainPath = `${modulePath}/${gexjson.name}/${gexjson.main}`;
         }
-        if(gexjson.files) {
-            for(let file of gexjson.files) {
-                savePath = `${downloadDir}/${file}`;
-                this._download({
-                    link: `${downloadSrc}/${file}`,
-                    savePath: savePath,
-                    isAsyncDownload: true
-                }).catch(debug);
-            }
-        }
-        if(gexjson.main) {
-            savePath = `${downloadDir}/${gexjson.main}`;
-            this._download({
-                link: `${downloadSrc}/${gexjson.main}`,
-                savePath: savePath,
-                isAsyncDownload: true
-            }).catch(debug);
-        }
+
+        let importsToEdit = {};
+
         if(gexjson.dependencies) {
             let dependencies = gexjson.dependencies;
             for(let dep in dependencies) {
                 let dependency = dependencies[dep];
                 let version = dependency.version || 'master';
+                if(dependency.repo)
+                    dependency.repo = dependency.repo.toLowerCase();
+
+                let depPath = `${dependency.repo}/${version}`;
+                importsToEdit[dep] = depPath;
                 let src = (dependency.repo)
-                    ? `${GIT_RAW}/${dependency.repo}/${version}`
+                    ? `${GIT_RAW}/${depPath}`
                     : null;
 
                 if(!src) {
@@ -173,12 +198,29 @@ var Downloader = class
                     src: src,
                     repo: dependency.repo,
                     version: version
+                })
+                    .then(() => this.modulesDownloads--)
+                    .catch(err => this._onUnrecoverableError(err));
+            }
+        }
+        importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
+        if(gexjson.files) {
+            for(let file of gexjson.files) {
+                savePath = `${downloadDir}/${file}`;
+                this._download({
+                    link: `${downloadSrc}/${file}`,
+                    savePath: savePath,
+                    importsToEdit
                 }).catch(err => this._onUnrecoverableError(err));
             }
         }
-        if(!imports.searchPath.includes(importDir)) {
-            imports.searchPath.unshift(importDir);
-            debug(`added dir to search path: ${importDir}`);
+        if(gexjson.main) {
+            savePath = `${downloadDir}/${gexjson.main}`;
+            this._download({
+                link: `${downloadSrc}/${gexjson.main}`,
+                savePath: savePath,
+                importsToEdit
+            }).catch(err => this._onUnrecoverableError(err));
         }
     }
 
@@ -204,9 +246,7 @@ var Downloader = class
             });
             if(data) {
                 this.activeDownloads--;
-
-                if(opts.isAsyncDownload)
-                    this._onAsyncDownloadCompleted();
+                this._onAsyncDownloadCompleted();
 
                 return data;
             }
@@ -235,7 +275,7 @@ var Downloader = class
         opts = Object.assign(defaults, opts);
 
         return new Promise((resolve, reject) => {
-            let file, fstream;
+            let file;
             let data = '';
 
             if(!opts.link)
@@ -245,17 +285,17 @@ var Downloader = class
                 debug(`verifying: ${opts.savePath}`);
                 file = Gio.file_new_for_path(opts.savePath);
                 if(file.query_exists(null)) {
-                    debug(`file exists`);
+                    debug(`file exists: ${opts.savePath}`);
                     if(!opts.parseJSON)
                         return resolve(true);
 
-                    let parsed = this._readFileJSON(file);
-                    if(parsed)
-                        return resolve(parsed);
+                    this._readFile(file, true)
+                        .then(json => resolve(json))
+                        .catch(err => reject([err, true]));
+                    return;
                 }
-                debug(`file is missing`);
+                debug(`file is missing: ${opts.savePath}`);
                 this._makeDirForFile(opts.savePath);
-                fstream = file.replace(null, false, Gio.FileCreateFlags.NONE, null);
             }
 
             if(!this.infoPrinted) {
@@ -264,23 +304,24 @@ var Downloader = class
             }
 
             let message = Soup.Message.new('GET', opts.link);
+            let isJsFile = (
+                !opts.parseJSON
+                && opts.savePath
+                && opts.savePath.endsWith('.js')
+            );
             debug('downloading: ' + opts.link);
 
             message.connect('got_chunk', (self, chunk) => {
                 debug('Got chunk of: ' + opts.link);
                 let chunkData = chunk.get_data();
-                if(opts.savePath)
-                    fstream.write(chunkData, null);
-                if(!opts.savePath || opts.parseJSON)
+                if(isJsFile || opts.parseJSON)
                     data += ByteArray.toString(chunkData);
             });
 
             this.session.queue_message(message, () => {
                 let json = null;
                 let err;
-                if(opts.savePath) {
-                    fstream.close(null);
-                }
+
                 if(message.status_code !== 200) {
                     return reject([
                         new Error(`response code: ${message.status_code}`),
@@ -288,8 +329,12 @@ var Downloader = class
                     ]);
                 }
                 debug('downloaded: ' + opts.link);
-                if(opts.savePath && !opts.parseJSON) {
-                    return resolve(true);
+                if(isJsFile) {
+                    data = this._editImports(opts.importsToEdit, data);
+                    this._saveFile(data, file)
+                        .then(() => resolve(true))
+                        .catch(err => reject(err));
+                    return;
                 }
                 else {
                     try { json = JSON.parse(data); }
@@ -301,6 +346,20 @@ var Downloader = class
                 resolve(json);
             });
         });
+    }
+
+    _editImports(importsToEdit, data)
+    {
+        for(let imp in importsToEdit) {
+            let oldImport = 'imports.' + imp;
+            let newImport = 'imports[\'' + importsToEdit[imp].replace(/\//g, '\'][\'') + '\'].' + imp;
+            let reg = new RegExp(oldImport, 'g');
+
+            debug(`replacing "${oldImport}" -> "${newImport}"`);
+            data = data.replace(reg, newImport);
+        }
+
+        return data;
     }
 
     async _updateCheck()
@@ -340,32 +399,9 @@ var Downloader = class
         });
     }
 
-    _run()
-    {
-        if(!this.mainPath)
-            return;
-
-        debug(`importing: ${this.mainPath}`);
-        let path = this.mainPath.substring(0, this.mainPath.indexOf('.js'));
-        path = path.split('/');
-
-        let mainImport = imports;
-        for(let subPath of path) {
-            if(mainImport[subPath])
-                mainImport = mainImport[subPath];
-        }
-
-        debug(`successfully imported: ${this.mainPath}`);
-        if(!mainImport.main || typeof mainImport.main !== 'function')
-            return debug('module does not have main function');
-
-        debug('starting main function...');
-        mainImport.main();
-    }
-
     _makeDirForFile(filePath)
     {
-        let saveDir = filePath.slice(0, filePath.lastIndexOf('/'));
+        let saveDir = GLib.path_get_dirname(filePath);
         if(saveDir === this.lastSaveDir)
             return debug('directory created earlier');
 
@@ -380,37 +416,85 @@ var Downloader = class
         debug(`directory created`);
     }
 
-    _readFileJSON(gioFile)
+    _readFile(gioFile, isJSON)
     {
-        let json = null;
-        let [res, data] = gioFile.load_contents(null);
-        if(!res)
-            return null;
+        return new Promise((resolve, reject) => {
+            let filePath = gioFile.get_path();
+            debug(`loading file: ${filePath}`);
+            gioFile.load_contents_async(null, (self, task) => {
+                this._onReadFileCompleted(self, task, isJSON, (data) => {
+                    if(!data)
+                        return reject(new Error(`could not load file: ${filePath}`));
 
-        try { json = JSON.parse(ByteArray.toString(data)); }
-        catch(e) { debug(e); }
-
-        GLib.free(data);
-
-        return json;
+                    debug(`loaded file: ${filePath}`);
+                    resolve(data);
+                });
+            });
+        });
     }
 
-    _saveFileJSON(contents, gioFile)
+    _onReadFileCompleted(gioFile, task, isJSON, cb)
     {
-        debug('saving file contents...');
-        gioFile.replace_contents(
-            JSON.stringify(contents, null, 2),
-            null,
-            false,
-            Gio.FileCreateFlags.NONE,
-            null
-        );
-        debug('file saved');
+        let json = null;
+        let [res, contents] = gioFile.load_contents_finish(task);
+
+        if(res && contents) {
+            if(isJSON) {
+                try { json = JSON.parse(ByteArray.toString(contents)); }
+                catch(e) { debug(e); }
+            }
+            else {
+                json = String(contents);
+            }
+        }
+
+        if(contents)
+            GLib.free(contents);
+
+        cb(json);
+    }
+
+    _saveFile(contents, gioFile, isJSON)
+    {
+        return new Promise((resolve, reject) => {
+            let filePath = gioFile.get_path();
+            debug(`saving file: ${filePath}`);
+            if(isJSON)
+                contents = JSON.stringify(contents, null, 2);
+
+            gioFile.replace_contents_bytes_async(
+                GLib.Bytes.new_take(contents),
+                null,
+                false,
+                Gio.FileCreateFlags.NONE,
+                null,
+                (self, task) => this._onSaveFileCompleted(self, task, (res) => {
+                    if(!res)
+                        return reject(new Error(`could not save file: ${filePath}`));
+
+                    debug(`saved file: ${filePath}`);
+                    resolve();
+                })
+            );
+        });
+    }
+
+    _onSaveFileCompleted(gioFile, task, cb)
+    {
+        let [res, etag] = gioFile.replace_contents_finish(task);
+
+        if(etag)
+            GLib.free(etag);
+
+        cb(res);
     }
 
     _onAsyncDownloadCompleted()
     {
-        if(this.activeDownloads)
+        debug(`downloads in queue: ${this.activeDownloads}`);
+        debug(`remaining modules: ${this.modulesDownloads}`);
+
+        if(this.activeDownloads || this.modulesDownloads)
             return;
 
         if(this.infoPrinted) {
@@ -418,9 +502,8 @@ var Downloader = class
             this.infoPrinted = true;
         }
 
-        debug('all downloads for module completed');
+        debug('all downloads completed');
         this.loop.quit();
-        this._run();
     }
 
     _onUnrecoverableError(err)

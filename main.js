@@ -20,4 +20,7 @@ function main()
         version: version,
         isDependency: false
     });
+
+    if(!gex.hadError)
+        gex.run();
 }
