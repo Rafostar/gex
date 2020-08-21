@@ -2,7 +2,7 @@ const { Gio, GLib, Soup } = imports.gi;
 const ByteArray = imports.byteArray;
 
 const NAME = 'gex';
-const VERSION = '0.0.3';
+const VERSION = '0.0.4';
 
 const TEMP_DIR = GLib.get_tmp_dir() + '/' + NAME;
 const GIT_RAW = `https://raw.githubusercontent.com`;
@@ -160,7 +160,7 @@ var Downloader = class
         let savePath = `${downloadDir}/${GEX_JSON}`;
         let downloadSrc = (opts.src)
             ? opts.src
-            : `${GIT_RAW}/${opts.repo}/${opts.version}`;
+            : `${GIT_RAW}/${modulePath}`;
 
         let gioFile = Gio.file_new_for_path(`${importDir}/${GEX_JSON}`);
         if(gioFile.query_exists(null)) {
@@ -169,6 +169,7 @@ var Downloader = class
         }
         if(!gexjson) {
             gexjson = await this._download({
+                file: `${modulePath}/${GEX_JSON}`,
                 link: `${downloadSrc}/${GEX_JSON}`,
                 parseJSON: true
             }).catch(debug);
@@ -234,6 +235,7 @@ var Downloader = class
             for(let file of gexjson.files) {
                 savePath = `${downloadDir}/${file}`;
                 this._download({
+                    file: `${modulePath}/${file}`,
                     link: `${downloadSrc}/${file}`,
                     savePath: savePath,
                     importsToEdit
@@ -243,6 +245,7 @@ var Downloader = class
         if(gexjson.main) {
             savePath = `${downloadDir}/${gexjson.main}`;
             this._download({
+                file: `${modulePath}/${gexjson.main}`,
                 link: `${downloadSrc}/${gexjson.main}`,
                 savePath: savePath,
                 importsToEdit
@@ -254,6 +257,7 @@ var Downloader = class
 
     async _download(opts)
     {
+        debug(`requested file: ${opts.file}`);
         this.filesQueue++;
 
         let retries = 3;
@@ -337,10 +341,10 @@ var Downloader = class
                 && opts.savePath
                 && opts.savePath.endsWith('.js')
             );
-            debug('downloading: ' + opts.link);
+            debug(`downloading: ${opts.link}`);
 
             message.connect('got_chunk', (self, chunk) => {
-                debug('Got chunk of: ' + opts.link);
+                debug(`got chunk of: ${opts.link}`);
                 let chunkData = chunk.get_data();
                 if(isJsFile || opts.parseJSON) {
                     data += (chunkData instanceof Uint8Array)
@@ -359,12 +363,12 @@ var Downloader = class
                         (message.status_code === 404)
                     ]);
                 }
-                debug('downloaded: ' + opts.link);
+                debug(`downloaded: ${opts.link}`);
                 if(isJsFile) {
                     data = this._editImports(opts.importsToEdit, data);
                     this._saveFile(data, file)
                         .then(() => resolve(true))
-                        .catch(err => reject(err));
+                        .catch(err => reject([err, true]));
                     return;
                 }
                 else {
@@ -382,10 +386,13 @@ var Downloader = class
     _editImports(importsToEdit, data)
     {
         for(let imp in importsToEdit) {
-            let oldImport = 'imports\\.' + imp;
+            let useBrackets = (imp.includes('-'));
+            let oldImport = (useBrackets)
+                ? 'imports[\'' + imp + '\']' : 'imports\\.' + imp;
             let reg = new RegExp(oldImport, 'g');
             let newImport = importsToEdit[imp].replace(/\//g, '\'][\'');
-            newImport = 'imports[\'' + newImport + '\'].' + imp;
+            newImport = 'imports[\'' + newImport + '\']';
+            newImport += (useBrackets) ? `['${imp}']` : `.${imp}`;
 
             debug(`replacing "${oldImport}" -> "${newImport}"`);
             data = data.replace(reg, newImport);
