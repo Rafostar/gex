@@ -2,7 +2,7 @@ const { Gio, GLib, Soup } = imports.gi;
 const ByteArray = imports.byteArray;
 
 const NAME = 'gex';
-const VERSION = '0.0.2';
+const VERSION = '0.0.3';
 
 const TEMP_DIR = GLib.get_tmp_dir() + '/' + NAME;
 const GIT_RAW = `https://raw.githubusercontent.com`;
@@ -37,8 +37,9 @@ var Downloader = class
 {
     constructor()
     {
-        this.activeDownloads = 0;
-        this.modulesDownloads = 0;
+        this._filesQueue = 0;
+        this._modulesQueue = 0;
+        this.modulesList = [];
 
         this.mainPath = null;
         this.lastSaveDir = null;
@@ -50,8 +51,30 @@ var Downloader = class
             user_agent: NAME,
             timeout: 5,
             use_thread_context: true,
-            max_conns_per_host: 3
+            max_conns_per_host: 4
         });
+    }
+
+    get modulesQueue()
+    {
+        return this._modulesQueue;
+    }
+
+    set modulesQueue(value)
+    {
+        this._modulesQueue = value;
+        debug(`modules in queue: ${this.modulesQueue}`);
+    }
+
+    set filesQueue(value)
+    {
+        this._filesQueue = value;
+        debug(`files in queue: ${this.filesQueue}`);
+    }
+
+    get filesQueue()
+    {
+        return this._filesQueue;
     }
 
     run()
@@ -64,8 +87,8 @@ var Downloader = class
             debug(`added ${NAME} dir to search path: ${TEMP_DIR}`);
         }
 
-        debug(`importing: ${this.mainPath}`);
         let path = this.mainPath.substring(0, this.mainPath.indexOf('.js'));
+        debug(`importing: ${this.mainPath}`);
         path = path.split('/');
 
         let mainImport = imports;
@@ -88,7 +111,6 @@ var Downloader = class
             opts.repo = `${GEX_OWNER}/opts.repo`;
 
         this._downloadModule(opts)
-            .then(() => this.modulesDownloads--)
             .catch(err => this._onUnrecoverableError(err));
 
         this.loop.run();
@@ -104,8 +126,6 @@ var Downloader = class
 
     async _downloadModule(opts)
     {
-        this.modulesDownloads++;
-
         let defaults = {
             name: null,
             repo: null,
@@ -127,6 +147,14 @@ var Downloader = class
 
         let gexjson;
         let modulePath = `${opts.repo}/${opts.version}`;
+
+        if(this.modulesList.includes(modulePath))
+            return debug(`skipping already added module: ${modulePath}`);
+
+        debug(`requested "${opts.name}" module from: ${modulePath}`);
+        this.modulesQueue++;
+
+        this.modulesList.push(modulePath);
         let importDir = `${TEMP_DIR}/${modulePath}`;
         let downloadDir = `${importDir}/${opts.name}`;
         let savePath = `${downloadDir}/${GEX_JSON}`;
@@ -136,7 +164,7 @@ var Downloader = class
 
         let gioFile = Gio.file_new_for_path(`${importDir}/${GEX_JSON}`);
         if(gioFile.query_exists(null)) {
-            debug(`found downloaded ${GEX_JSON} for "${opts.name}" module`);
+            debug(`found downloaded "${GEX_JSON}" for "${opts.name}" module`);
             gexjson = await this._readFile(gioFile, true).catch(debug);
         }
         if(!gexjson) {
@@ -153,9 +181,9 @@ var Downloader = class
         }
 
         if(!gexjson)
-            throw new Error(`could not obtain ${GEX_JSON} for "${opts.name}" module`);
+            throw new Error(`could not obtain "${GEX_JSON}" for "${opts.name}" module`);
 
-        debug(`successfully obtained ${GEX_JSON} for "${opts.name}" module`);
+        debug(`successfully obtained "${GEX_JSON}" for "${opts.name}" module`);
 
         if(Array.isArray(gexjson)) {
             gexjson = (opts.name)
@@ -163,7 +191,7 @@ var Downloader = class
                 : gexjson[0];
         }
         if(typeof gexjson !== 'object')
-            throw new Error(`module "${opts.name}" not found in ${GEX_JSON}`);
+            throw new Error(`module "${opts.name}" not found in "${GEX_JSON}"`);
 
         if(!opts.isDependency && !this.mainPath) {
             if(!gexjson.main)
@@ -198,9 +226,7 @@ var Downloader = class
                     src: src,
                     repo: dependency.repo,
                     version: version
-                })
-                    .then(() => this.modulesDownloads--)
-                    .catch(err => this._onUnrecoverableError(err));
+                }).catch(err => this._onUnrecoverableError(err));
             }
         }
         importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
@@ -222,11 +248,13 @@ var Downloader = class
                 importsToEdit
             }).catch(err => this._onUnrecoverableError(err));
         }
+
+        this.modulesQueue--;
     }
 
     async _download(opts)
     {
-        this.activeDownloads++;
+        this.filesQueue++;
 
         let retries = 3;
         let stop = false;
@@ -245,7 +273,7 @@ var Downloader = class
                 }
             });
             if(data) {
-                this.activeDownloads--;
+                this.filesQueue--;
                 this._onAsyncDownloadCompleted();
 
                 return data;
@@ -314,8 +342,11 @@ var Downloader = class
             message.connect('got_chunk', (self, chunk) => {
                 debug('Got chunk of: ' + opts.link);
                 let chunkData = chunk.get_data();
-                if(isJsFile || opts.parseJSON)
-                    data += ByteArray.toString(chunkData);
+                if(isJsFile || opts.parseJSON) {
+                    data += (chunkData instanceof Uint8Array)
+                        ? ByteArray.toString(chunkData)
+                        : chunkData;
+                }
             });
 
             this.session.queue_message(message, () => {
@@ -351,9 +382,10 @@ var Downloader = class
     _editImports(importsToEdit, data)
     {
         for(let imp in importsToEdit) {
-            let oldImport = 'imports.' + imp;
-            let newImport = 'imports[\'' + importsToEdit[imp].replace(/\//g, '\'][\'') + '\'].' + imp;
+            let oldImport = 'imports\\.' + imp;
             let reg = new RegExp(oldImport, 'g');
+            let newImport = importsToEdit[imp].replace(/\//g, '\'][\'');
+            newImport = 'imports[\'' + newImport + '\'].' + imp;
 
             debug(`replacing "${oldImport}" -> "${newImport}"`);
             data = data.replace(reg, newImport);
@@ -440,7 +472,10 @@ var Downloader = class
 
         if(res && contents) {
             if(isJSON) {
-                try { json = JSON.parse(ByteArray.toString(contents)); }
+                if(contents instanceof Uint8Array)
+                    contents = ByteArray.toString(contents);
+
+                try { json = JSON.parse(contents); }
                 catch(e) { debug(e); }
             }
             else {
@@ -491,10 +526,7 @@ var Downloader = class
 
     _onAsyncDownloadCompleted()
     {
-        debug(`downloads in queue: ${this.activeDownloads}`);
-        debug(`remaining modules: ${this.modulesDownloads}`);
-
-        if(this.activeDownloads || this.modulesDownloads)
+        if(this.modulesQueue || this.filesQueue)
             return;
 
         if(this.infoPrinted) {
