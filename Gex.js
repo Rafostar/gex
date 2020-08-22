@@ -202,6 +202,7 @@ var Downloader = class
         }
 
         let importsToEdit = {};
+        importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
 
         if(gexjson.dependencies) {
             let dependencies = gexjson.dependencies;
@@ -230,7 +231,6 @@ var Downloader = class
                 }).catch(err => this._onUnrecoverableError(err));
             }
         }
-        importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
         if(gexjson.files) {
             for(let file of gexjson.files) {
                 savePath = `${downloadDir}/${file}`;
@@ -393,6 +393,9 @@ var Downloader = class
             let newImport = importsToEdit[imp].replace(/\//g, '\'][\'');
             newImport = 'imports[\'' + newImport + '\']';
             newImport += (useBrackets) ? `['${imp}']` : `.${imp}`;
+
+            if(!useBrackets)
+                oldImport = oldImport.replace(/\\/g, '');
 
             debug(`replacing "${oldImport}" -> "${newImport}"`);
             data = data.replace(reg, newImport);
