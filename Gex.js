@@ -1,8 +1,9 @@
 const { Gio, GLib, Soup } = imports.gi;
 const ByteArray = imports.byteArray;
+const Debug = imports.gex.debug;
 
 const NAME = 'gex';
-const VERSION = '0.0.4';
+const VERSION = '0.0.5';
 
 const TEMP_DIR = GLib.get_tmp_dir() + '/' + NAME;
 const GIT_RAW = `https://raw.githubusercontent.com`;
@@ -11,27 +12,8 @@ const GEX_OWNER = 'Rafostar';
 const GEX_REPO = `${GEX_OWNER}/${NAME}`;
 const GEX_JSON = `${NAME}.json`;
 const GEX_LATEST = `https://github.com/${GEX_REPO}/releases/latest`;
-const GEX_INFO = `\x1B[1;32m${NAME}: \x1B[0m`;
 
-function debug(msg)
-{
-    let level = 'LEVEL_DEBUG';
-
-    if(msg.constructor === Error) {
-        level = 'LEVEL_CRITICAL';
-        msg = msg.message;
-    }
-    GLib.log_structured(
-        NAME, GLib.LogLevelFlags[level], {
-            MESSAGE: msg,
-            SYSLOG_IDENTIFIER: NAME
-    });
-}
-
-function info(msg)
-{
-    printerr(GEX_INFO + msg);
-}
+let { debug, info } = Debug;
 
 var Downloader = class
 {
@@ -130,7 +112,7 @@ var Downloader = class
             name: null,
             repo: null,
             src: null,
-            version: 'master',
+            version: null,
             isDependency: true
         };
 
@@ -141,9 +123,12 @@ var Downloader = class
         if(!opts.name) {
             opts.name === opts.repo.substing(opts.repo.indexOf('/') + 1);
         }
-        if(opts.version !== 'master' && opts.version.length > 7) {
-            opts.version = opts.version.substring(0, 7);
-        }
+
+        opts.version = (!opts.version)
+            ? 'master'
+            : (opts.version.length > 7)
+            ? opts.version.substring(0, 7)
+            : opts.version;
 
         let gexjson;
         let modulePath = `${opts.repo}/${opts.version}`;
@@ -550,7 +535,7 @@ var Downloader = class
 
     _onUnrecoverableError(err)
     {
-        debug(err, true);
+        debug(err);
         this.hadError = true;
         this.loop.quit();
     }
