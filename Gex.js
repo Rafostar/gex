@@ -1,16 +1,14 @@
 const { Gio, GLib, Soup } = imports.gi;
 const ByteArray = imports.byteArray;
 const Debug = imports.gex.debug;
+const About = imports.gex.about;
 
-const NAME = 'gex';
-const VERSION = '0.0.5';
-
-const TEMP_DIR = GLib.get_tmp_dir() + '/' + NAME;
+const TEMP_DIR = GLib.get_tmp_dir() + '/' + About.name;
 const GIT_RAW = `https://raw.githubusercontent.com`;
 
 const GEX_OWNER = 'Rafostar';
-const GEX_REPO = `${GEX_OWNER}/${NAME}`;
-const GEX_JSON = `${NAME}.json`;
+const GEX_REPO = `${GEX_OWNER}/${About.name}`;
+const GEX_JSON = `${About.name}.json`;
 const GEX_LATEST = `https://github.com/${GEX_REPO}/releases/latest`;
 
 let { debug, info } = Debug;
@@ -30,7 +28,7 @@ var Downloader = class
 
         this.loop = GLib.MainLoop.new(null, false);
         this.session = new Soup.Session({
-            user_agent: NAME,
+            user_agent: About.name,
             timeout: 5,
             use_thread_context: true,
             max_conns_per_host: 4
@@ -66,7 +64,7 @@ var Downloader = class
 
         if(imports.searchPath[0] !== TEMP_DIR) {
             imports.searchPath.unshift(TEMP_DIR);
-            debug(`added ${NAME} dir to search path: ${TEMP_DIR}`);
+            debug(`added ${About.name} dir to search path: ${TEMP_DIR}`);
         }
 
         let path = this.mainPath.substring(0, this.mainPath.indexOf('.js'));
@@ -395,12 +393,12 @@ var Downloader = class
         this.loop.quit();
 
         if(version)
-            info(`found update: ${VERSION} -> ${version}`);
+            info(`found update: ${About.version} -> ${version}`);
     }
 
     _findUpdate()
     {
-        debug(`checking for ${NAME} update...`);
+        debug(`checking for ${About.name} update...`);
         return new Promise((resolve, reject) => {
             let request = this.session.request_http('GET', GEX_LATEST);
             request.send_async(null, () => {
@@ -411,12 +409,12 @@ var Downloader = class
                 let uri = message.get_uri().to_string(true);
                 let version = uri.substring(uri.lastIndexOf('/') + 1);
 
-                if(!version || version.length !== VERSION.length) {
+                if(!version || version.length !== About.version.length) {
                     debug('update version mismatch');
                     return resolve(null);
                 }
 
-                if(version === VERSION) {
+                if(version === About.version) {
                     debug('no new update');
                     return resolve(null);
                 }

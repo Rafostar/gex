@@ -1,7 +1,9 @@
 const { GLib } = imports.gi;
+const About = imports.gex.about;
 
-const NAME = 'gex';
-const GEX_INFO = `\x1B[1;32m${NAME}: \x1B[0m`;
+const GEX_INFO = `\x1B[1;32m${About.name}: \x1B[0m`;
+
+var quiet = false;
 
 function debug(msg)
 {
@@ -13,13 +15,16 @@ function debug(msg)
 
     }
     GLib.log_structured(
-        NAME, GLib.LogLevelFlags[level], {
+        About.name, GLib.LogLevelFlags[level], {
             MESSAGE: msg,
-            SYSLOG_IDENTIFIER: NAME
+            SYSLOG_IDENTIFIER: About.name
     });
 }
 
 function info(msg)
 {
+    if(quiet)
+        return;
+
     printerr(GEX_INFO + msg);
 }
