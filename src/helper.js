@@ -1,5 +1,4 @@
-const About = imports.gex.about;
-const Debug = imports.gex.debug;
+const Debug = imports.src.debug;
 
 let { info } = Debug;
 
@@ -56,13 +55,13 @@ function parseArgs(args)
 
 function showHelp()
 {
-    let nameUpper = About.name[0].toUpperCase() + About.name.slice(1);
+    let nameUpper = pkg.name[0].toUpperCase() + pkg.name.slice(1);
 
     let help = [
-        `${nameUpper} ${About.version}, download and run GJS modules from GIT.`,
+        `${nameUpper} ${pkg.version}, download and run GJS modules from GIT.`,
         ``,
         `Usage:`,
-        `  ${About.name} <REPO_OWNER/REPO_NAME[/VERSION]> [MODULE_NAME]`,
+        `  ${pkg.name} <REPO_OWNER/REPO_NAME[/VERSION]> [MODULE_NAME]`,
         ``,
         `Options:`,
         `  -h,  --help            show this help screen`,
@@ -76,7 +75,7 @@ function showHelp()
 
 function showVersion()
 {
-    print(About.version);
+    print(pkg.version);
 }
 
 function showInvalid(option)
@@ -96,7 +95,7 @@ function getShortcut(opts)
         `Type=Application`,
         `Name=${opts.name}`,
         `Icon=${opts.icon || 'system-software-install'}`,
-        `Exec=${About.name} ${opts.exec}`,
+        `Exec=${pkg.name} ${opts.exec}`,
         `Terminal=${opts.terminal}`,
     ].join('\n');
 

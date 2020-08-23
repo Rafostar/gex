@@ -1,14 +1,13 @@
 const { Gio, GLib, Soup } = imports.gi;
 const ByteArray = imports.byteArray;
-const Debug = imports.gex.debug;
-const About = imports.gex.about;
+const Debug = imports.src.debug;
 
-const TEMP_DIR = GLib.get_tmp_dir() + '/' + About.name;
+const TEMP_DIR = GLib.get_tmp_dir() + '/' + pkg.name;
 const GIT_RAW = `https://raw.githubusercontent.com`;
 
 const GEX_OWNER = 'Rafostar';
-const GEX_REPO = `${GEX_OWNER}/${About.name}`;
-const GEX_JSON = `${About.name}.json`;
+const GEX_REPO = `${GEX_OWNER}/${pkg.name}`;
+const GEX_JSON = `${pkg.name}.json`;
 const GEX_LATEST = `https://github.com/${GEX_REPO}/releases/latest`;
 
 let { debug, info } = Debug;
@@ -28,7 +27,7 @@ var Downloader = class
 
         this.loop = GLib.MainLoop.new(null, false);
         this.session = new Soup.Session({
-            user_agent: About.name,
+            user_agent: pkg.name,
             timeout: 5,
             use_thread_context: true,
             max_conns_per_host: 4
@@ -64,7 +63,7 @@ var Downloader = class
 
         if(imports.searchPath[0] !== TEMP_DIR) {
             imports.searchPath.unshift(TEMP_DIR);
-            debug(`added ${About.name} dir to search path: ${TEMP_DIR}`);
+            debug(`added ${pkg.name} dir to search path: ${TEMP_DIR}`);
         }
 
         let path = this.mainPath.substring(0, this.mainPath.indexOf('.js'));
@@ -88,7 +87,7 @@ var Downloader = class
     downloadModule(opts)
     {
         if(opts.repo && !opts.repo.includes('/'))
-            opts.repo = `${GEX_OWNER}/opts.repo`;
+            opts.repo = `${GEX_OWNER}/${opts.repo}`;
 
         this._downloadModule(opts)
             .catch(err => this._onUnrecoverableError(err));
@@ -119,7 +118,7 @@ var Downloader = class
             opts.repo = opts.repo.toLowerCase();
         }
         if(!opts.name) {
-            opts.name === opts.repo.substing(opts.repo.indexOf('/') + 1);
+            opts.name === opts.repo.substring(opts.repo.indexOf('/') + 1);
         }
 
         opts.version = (!opts.version)
@@ -393,12 +392,12 @@ var Downloader = class
         this.loop.quit();
 
         if(version)
-            info(`found update: ${About.version} -> ${version}`);
+            info(`found update: ${pkg.version} -> ${version}`);
     }
 
     _findUpdate()
     {
-        debug(`checking for ${About.name} update...`);
+        debug(`checking for ${pkg.name} update...`);
         return new Promise((resolve, reject) => {
             let request = this.session.request_http('GET', GEX_LATEST);
             request.send_async(null, () => {
@@ -409,12 +408,12 @@ var Downloader = class
                 let uri = message.get_uri().to_string(true);
                 let version = uri.substring(uri.lastIndexOf('/') + 1);
 
-                if(!version || version.length !== About.version.length) {
+                if(!version || version.length !== pkg.version.length) {
                     debug('update version mismatch');
                     return resolve(null);
                 }
 
-                if(version === About.version) {
+                if(version === pkg.version) {
                     debug('no new update');
                     return resolve(null);
                 }

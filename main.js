@@ -1,6 +1,8 @@
-const { Gex } = imports.gex;
-const Helper = imports.gex.helper;
-const Debug = imports.gex.debug;
+pkg.version = '0.0.7';
+
+const Gex = imports.src.gex;
+const Helper = imports.src.helper;
+const Debug = imports.src.debug;
 
 let { info } = Debug;
 
