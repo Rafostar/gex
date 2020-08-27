@@ -1,7 +1,10 @@
 {
   "name": "gex",
   "files": [
-    "main.js",
-    "Gex.js"
+    "COPYING",
+    "src/debug.js",
+    "src/gex.js",
+    "src/helper.js",
+    "main.js"
   ]
 }
