@@ -9,8 +9,9 @@ const GEX_OWNER = 'Rafostar';
 const GEX_REPO = `${GEX_OWNER}/${pkg.name}`;
 const GEX_JSON = `${pkg.name}.json`;
 const GEX_LATEST = `https://github.com/${GEX_REPO}/releases/latest`;
+const LICENSES = ['COPYING', 'LICENSE'];
 
-let { debug, info } = Debug;
+let { debug, info, infoUpdate } = Debug;
 
 var Downloader = class
 {
@@ -24,6 +25,7 @@ var Downloader = class
         this.lastSaveDir = null;
         this.hadError = false;
         this.infoPrinted = false;
+        this.update = false;
 
         this.loop = GLib.MainLoop.new(null, false);
         this.session = new Soup.Session({
@@ -89,18 +91,19 @@ var Downloader = class
         if(opts.repo && !opts.repo.includes('/'))
             opts.repo = `${GEX_OWNER}/${opts.repo}`;
 
+        if(!opts.downloadDir)
+            opts.downloadDir = TEMP_DIR;
+
         this._downloadModule(opts)
             .catch(err => this._onUnrecoverableError(err));
+
+        let tempDir = Gio.file_new_for_path(opts.downloadDir);
+        if(!tempDir.query_exists(null))
+            this._updateCheck();
 
         this.loop.run();
 
         return !this.hadError;
-    }
-
-    updateCheck()
-    {
-        this._updateCheck();
-        this.loop.run();
     }
 
     async _downloadModule(opts)
@@ -110,7 +113,12 @@ var Downloader = class
             repo: null,
             src: null,
             version: null,
-            isDependency: true
+            isDependency: true,
+            downloadDir: TEMP_DIR,
+            editImports: true,
+            forceUpdate: false,
+            saveGexJSON: true,
+            dirStructure: true
         };
 
         opts = Object.assign(defaults, opts);
@@ -137,15 +145,17 @@ var Downloader = class
         this.modulesQueue++;
 
         this.modulesList.push(modulePath);
-        let importDir = `${TEMP_DIR}/${modulePath}`;
-        let downloadDir = `${importDir}/${opts.name}`;
-        let savePath = `${downloadDir}/${GEX_JSON}`;
+        let importDir = (opts.dirStructure)
+            ? `${opts.downloadDir}/${modulePath}`
+            : opts.downloadDir;
+        let workDir = `${importDir}/${opts.name}`;
+        let savePath = `${workDir}/${GEX_JSON}`;
         let downloadSrc = (opts.src)
             ? opts.src
             : `${GIT_RAW}/${modulePath}`;
 
         let gioFile = Gio.file_new_for_path(`${importDir}/${GEX_JSON}`);
-        if(gioFile.query_exists(null)) {
+        if(!opts.forceUpdate && gioFile.query_exists(null)) {
             debug(`found downloaded "${GEX_JSON}" for "${opts.name}" module`);
             gexjson = await this._readFile(gioFile, true).catch(debug);
         }
@@ -153,10 +163,11 @@ var Downloader = class
             gexjson = await this._download({
                 file: `${modulePath}/${GEX_JSON}`,
                 link: `${downloadSrc}/${GEX_JSON}`,
-                parseJSON: true
+                parseJSON: true,
+                forceUpdate: opts.forceUpdate
             }).catch(debug);
 
-            if(gexjson) {
+            if(gexjson && opts.saveGexJSON) {
                 this._makeDirForFile(`${importDir}/${GEX_JSON}`);
                 await this._saveFile(gexjson, gioFile, true)
                     .catch(err => this._onUnrecoverableError(err));
@@ -184,52 +195,56 @@ var Downloader = class
         }
 
         let importsToEdit = {};
-        importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
+
+        if(opts.editImports)
+            importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
 
         if(gexjson.dependencies) {
             let dependencies = gexjson.dependencies;
             for(let dep in dependencies) {
                 let dependency = dependencies[dep];
-                let version = dependency.version || 'master';
-                if(dependency.repo)
-                    dependency.repo = dependency.repo.toLowerCase();
-
-                let depPath = `${dependency.repo}/${version}`;
-                importsToEdit[dep] = depPath;
-                let src = (dependency.repo)
-                    ? `${GIT_RAW}/${depPath}`
-                    : null;
-
-                if(!src) {
+                if(!dependency.repo && !dependency.src) {
                     throw new Error(
                         `dependency "${dep}" of module "${opts.name}" is missing a source`
                     );
                 }
-                this._downloadModule({
+                if(dependency.repo)
+                    dependency.repo = dependency.repo.toLowerCase();
+
+                let version = dependency.version || 'master';
+                if(opts.editImports) {
+                    let depPath = `${dependency.repo}/${version}`;
+                    importsToEdit[dep] = depPath;
+                }
+                let nextOpts = Object.assign(opts, {
                     name: dep,
-                    src: src,
+                    src: dependency.src,
                     repo: dependency.repo,
                     version: version
-                }).catch(err => this._onUnrecoverableError(err));
+                });
+                this._downloadModule(nextOpts)
+                    .catch(err => this._onUnrecoverableError(err));
             }
         }
         if(gexjson.files) {
             for(let file of gexjson.files) {
-                savePath = `${downloadDir}/${file}`;
+                savePath = `${workDir}/${file}`;
                 this._download({
                     file: `${modulePath}/${file}`,
                     link: `${downloadSrc}/${file}`,
                     savePath: savePath,
+                    forceUpdate: (opts.forceUpdate && !LICENSES.includes(file)),
                     importsToEdit
                 }).catch(err => this._onUnrecoverableError(err));
             }
         }
         if(gexjson.main) {
-            savePath = `${downloadDir}/${gexjson.main}`;
+            savePath = `${workDir}/${gexjson.main}`;
             this._download({
                 file: `${modulePath}/${gexjson.main}`,
                 link: `${downloadSrc}/${gexjson.main}`,
                 savePath: savePath,
+                forceUpdate: opts.forceUpdate,
                 importsToEdit
             }).catch(err => this._onUnrecoverableError(err));
         }
@@ -280,7 +295,9 @@ var Downloader = class
         let defaults = {
             link: (optsType === 'string') ? opts : null,
             savePath: null,
-            parseJSON: false
+            parseJSON: false,
+            forceUpdate: false,
+            importsToEdit: []
         };
 
         if(optsType !== 'object')
@@ -296,19 +313,21 @@ var Downloader = class
                 return reject([new Error('missing download link'), true]);
 
             if(opts.savePath) {
-                debug(`verifying: ${opts.savePath}`);
                 file = Gio.file_new_for_path(opts.savePath);
-                if(file.query_exists(null)) {
-                    debug(`file exists: ${opts.savePath}`);
-                    if(!opts.parseJSON)
-                        return resolve(true);
+                if(!opts.forceUpdate) {
+                    debug(`verifying: ${opts.savePath}`);
+                    if(file.query_exists(null)) {
+                        debug(`file exists: ${opts.savePath}`);
+                        if(!opts.parseJSON)
+                            return resolve(true);
 
-                    this._readFile(file, true)
-                        .then(json => resolve(json))
-                        .catch(err => reject([err, true]));
-                    return;
+                        this._readFile(file, true)
+                            .then(json => resolve(json))
+                            .catch(err => reject([err, true]));
+                        return;
+                    }
+                    debug(`file is missing: ${opts.savePath}`);
                 }
-                debug(`file is missing: ${opts.savePath}`);
                 this._makeDirForFile(opts.savePath);
             }
 
@@ -328,11 +347,9 @@ var Downloader = class
             message.connect('got_chunk', (self, chunk) => {
                 debug(`got chunk of: ${opts.link}`);
                 let chunkData = chunk.get_data();
-                if(isJsFile || opts.parseJSON) {
-                    data += (chunkData instanceof Uint8Array)
-                        ? ByteArray.toString(chunkData)
-                        : chunkData;
-                }
+                data += (chunkData instanceof Uint8Array)
+                    ? ByteArray.toString(chunkData)
+                    : chunkData;
             });
 
             this.session.queue_message(message, () => {
@@ -346,8 +363,10 @@ var Downloader = class
                     ]);
                 }
                 debug(`downloaded: ${opts.link}`);
-                if(isJsFile) {
-                    data = this._editImports(opts.importsToEdit, data);
+                if(!opts.parseJSON) {
+                    if(isJsFile)
+                        data = this._editImports(opts.importsToEdit, data);
+
                     this._saveFile(data, file)
                         .then(() => resolve(true))
                         .catch(err => reject([err, true]));
@@ -389,35 +408,53 @@ var Downloader = class
     async _updateCheck()
     {
         let version = await this._findUpdate().catch(debug);
-        this.loop.quit();
 
-        if(version)
-            info(`found update: ${pkg.version} -> ${version}`);
+        if(version) {
+            infoUpdate(`updating ${pkg.name}...`);
+            this.update = true;
+            this._downloadModule({
+                name: pkg.name,
+                repo: GEX_REPO,
+                version: version,
+                downloadDir: pkg.datadir,
+                editImports: false,
+                forceUpdate: true,
+                saveGexJSON: false,
+                dirStructure: false
+            }).catch(err => this._onUnrecoverableError(err));
+        }
+
+        this.filesQueue--;
     }
 
     _findUpdate()
     {
-        debug(`checking for ${pkg.name} update...`);
-        return new Promise((resolve, reject) => {
+        infoUpdate(`checking for ${pkg.name} update...`);
+        this.filesQueue++;
+
+        return new Promise(resolve => {
             let request = this.session.request_http('GET', GEX_LATEST);
             request.send_async(null, () => {
                 let message = request.get_message();
-                if(!message || message.status_code !== 200)
-                    return reject(new Error('update check failed'));
+                if(!message || message.status_code !== 200) {
+                    infoUpdate('update check failed');
+                    return resolve(null);
+                }
 
                 let uri = message.get_uri().to_string(true);
                 let version = uri.substring(uri.lastIndexOf('/') + 1);
 
                 if(!version || version.length !== pkg.version.length) {
-                    debug('update version mismatch');
+                    infoUpdate('update version mismatch');
                     return resolve(null);
                 }
 
                 if(version === pkg.version) {
-                    debug('no new update');
+                    infoUpdate('no new update');
                     return resolve(null);
                 }
 
+                infoUpdate(`found update: ${pkg.version} -> ${version}`);
                 resolve(version);
             });
         });
@@ -521,10 +558,11 @@ var Downloader = class
         if(this.modulesQueue || this.filesQueue)
             return;
 
-        if(this.infoPrinted) {
+        if(this.update)
+            infoUpdate('update complete');
+
+        if(this.infoPrinted)
             info('download complete');
-            this.infoPrinted = true;
-        }
 
         debug('all downloads completed');
         this.loop.quit();
