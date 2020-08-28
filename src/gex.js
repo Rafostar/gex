@@ -122,41 +122,36 @@ var Downloader = class
         };
 
         opts = Object.assign(defaults, opts);
-        if(opts.repo) {
-            opts.repo = opts.repo.toLowerCase();
-        }
-        if(!opts.name) {
-            opts.name === opts.repo.substring(opts.repo.indexOf('/') + 1);
-        }
-
+        opts.repo = opts.repo.toLowerCase();
         opts.version = (!opts.version)
             ? 'master'
             : (opts.version.length > 7)
             ? opts.version.substring(0, 7)
             : opts.version;
 
+        let msgName = (opts.name)
+            ? `"${opts.name}" module`
+            : `"${opts.repo}" repo`;
         let gexjson;
         let modulePath = `${opts.repo}/${opts.version}`;
 
         if(this.modulesList.includes(modulePath))
             return debug(`skipping already added module: ${modulePath}`);
 
-        debug(`requested "${opts.name}" module from: ${modulePath}`);
+        debug(`requested "${opts.name || 'default'}" module from: ${modulePath}`);
         this.modulesQueue++;
 
         this.modulesList.push(modulePath);
         let importDir = (opts.dirStructure)
             ? `${opts.downloadDir}/${modulePath}`
             : opts.downloadDir;
-        let workDir = `${importDir}/${opts.name}`;
-        let savePath = `${workDir}/${GEX_JSON}`;
         let downloadSrc = (opts.src)
             ? opts.src
             : `${GIT_RAW}/${modulePath}`;
 
         let gioFile = Gio.file_new_for_path(`${importDir}/${GEX_JSON}`);
         if(!opts.forceUpdate && gioFile.query_exists(null)) {
-            debug(`found downloaded "${GEX_JSON}" for "${opts.name}" module`);
+            debug(`found downloaded "${GEX_JSON}" for ${msgName}`);
             gexjson = await this._readFile(gioFile, true).catch(debug);
         }
         if(!gexjson) {
@@ -175,9 +170,9 @@ var Downloader = class
         }
 
         if(!gexjson)
-            throw new Error(`could not obtain "${GEX_JSON}" for "${opts.name}" module`);
+            throw new Error(`could not obtain "${GEX_JSON}" for ${msgName}`);
 
-        debug(`successfully obtained "${GEX_JSON}" for "${opts.name}" module`);
+        debug(`successfully obtained "${GEX_JSON}" for ${msgName}`);
 
         if(Array.isArray(gexjson)) {
             gexjson = (opts.name)
@@ -186,7 +181,8 @@ var Downloader = class
         }
         if(typeof gexjson !== 'object')
             throw new Error(`module "${opts.name}" not found in "${GEX_JSON}"`);
-
+        if(!opts.name)
+            opts.name = gexjson.name;
         if(!opts.isDependency && !this.mainPath) {
             if(!gexjson.main)
                 throw new Error(`module "${opts.name}" is not a runnable app`);
@@ -198,7 +194,6 @@ var Downloader = class
 
         if(opts.editImports)
             importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
-
         if(gexjson.dependencies) {
             let dependencies = gexjson.dependencies;
             for(let dep in dependencies) {
@@ -226,6 +221,9 @@ var Downloader = class
                     .catch(err => this._onUnrecoverableError(err));
             }
         }
+
+        let savePath;
+        let workDir = `${importDir}/${opts.name}`;
         if(gexjson.files) {
             for(let file of gexjson.files) {
                 savePath = `${workDir}/${file}`;
@@ -425,6 +423,7 @@ var Downloader = class
         }
 
         this.filesQueue--;
+        this._onAsyncDownloadCompleted();
     }
 
     _findUpdate()
