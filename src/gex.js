@@ -190,6 +190,8 @@ var Downloader = class
                 this.mainPath = `${modulePath}/${gexjson.name}/${gexjson.main}`;
         }
 
+        let savePath;
+        let workDir = `${importDir}/${opts.name}`;
         let importsToEdit = {};
 
         if(opts.editImports)
@@ -221,9 +223,6 @@ var Downloader = class
                     .catch(err => this._onUnrecoverableError(err));
             }
         }
-
-        let savePath;
-        let workDir = `${importDir}/${opts.name}`;
         if(gexjson.files) {
             for(let file of gexjson.files) {
                 savePath = `${workDir}/${file}`;
