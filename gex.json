@@ -5,6 +5,7 @@
     "src/debug.js",
     "src/gex.js",
     "src/helper.js",
+    "gexAid.js",
     "main.js"
   ]
 }

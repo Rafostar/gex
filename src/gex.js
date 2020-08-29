@@ -1,6 +1,7 @@
 const { Gio, GLib, Soup } = imports.gi;
 const ByteArray = imports.byteArray;
 const Debug = imports.src.debug;
+const GexAid = imports.gexAid;
 
 const TEMP_DIR = GLib.get_tmp_dir() + '/' + pkg.name;
 const GIT_RAW = `https://raw.githubusercontent.com`;
@@ -183,19 +184,23 @@ var Downloader = class
             throw new Error(`module "${opts.name}" not found in "${GEX_JSON}"`);
         if(!opts.name)
             opts.name = gexjson.name;
+
+        let modulePathFull = `${modulePath}/${opts.name}`;
         if(!opts.isDependency && !this.mainPath) {
             if(!gexjson.main)
                 throw new Error(`module "${opts.name}" is not a runnable app`);
             else
-                this.mainPath = `${modulePath}/${gexjson.name}/${gexjson.main}`;
+                this.mainPath = `${modulePathFull}/${gexjson.main}`;
         }
 
         let savePath;
         let workDir = `${importDir}/${opts.name}`;
         let importsToEdit = {};
 
+        GexAid.paths[opts.name] = workDir;
+
         if(opts.editImports)
-            importsToEdit[gexjson.name] = `${opts.repo}/${opts.version}`;
+            importsToEdit[opts.name] = modulePath;
         if(gexjson.dependencies) {
             let dependencies = gexjson.dependencies;
             for(let dep in dependencies) {
@@ -224,6 +229,19 @@ var Downloader = class
             }
         }
         if(gexjson.files) {
+            for(let file of gexjson.files) {
+                if(!file.endsWith('.js'))
+                    continue;
+
+                let fileImport = (file.includes('/'))
+                    ? file.substring(0, file.indexOf('/'))
+                    : file.substring(0, file.lastIndexOf('.js'));
+
+                if(importsToEdit[fileImport])
+                    continue;
+
+                importsToEdit[fileImport] = modulePathFull;
+            }
             for(let file of gexjson.files) {
                 savePath = `${workDir}/${file}`;
                 this._download({
