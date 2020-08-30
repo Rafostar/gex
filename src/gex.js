@@ -274,6 +274,7 @@ var Downloader = class
 
         let retries = 3;
         let stop = false;
+        let isGschema = opts.file.endsWith('.gschema.xml');
 
         while(retries-- && !stop) {
             let data = await this._tryDownload(opts).catch(res => {
@@ -289,6 +290,13 @@ var Downloader = class
                 }
             });
             if(data) {
+                if(isGschema) {
+                    let schemasDir = opts.savePath.substring(
+                        0, opts.savePath.lastIndexOf('/')
+                    );
+                    await this._compileSchemas(schemasDir)
+                        .catch(err => this._onUnrecoverableError(err));
+                }
                 this.filesQueue--;
                 this._onAsyncDownloadCompleted();
 
@@ -510,30 +518,6 @@ var Downloader = class
         });
     }
 
-    _onReadFileCompleted(gioFile, task, isJSON, cb)
-    {
-        let json = null;
-        let [res, contents] = gioFile.load_contents_finish(task);
-
-        if(res && contents) {
-            if(isJSON) {
-                if(contents instanceof Uint8Array)
-                    contents = ByteArray.toString(contents);
-
-                try { json = JSON.parse(contents); }
-                catch(e) { debug(e); }
-            }
-            else {
-                json = String(contents);
-            }
-        }
-
-        if(contents)
-            GLib.free(contents);
-
-        cb(json);
-    }
-
     _saveFile(contents, gioFile, isJSON)
     {
         return new Promise((resolve, reject) => {
@@ -557,6 +541,51 @@ var Downloader = class
                 })
             );
         });
+    }
+
+    _compileSchemas(path)
+    {
+        return new Promise((resolve, reject) => {
+            let proc = Gio.Subprocess.new(
+                ['glib-compile-schemas', `${path}/`],
+                Gio.SubprocessFlags.NONE
+            );
+            if(!proc)
+                return reject('could not compile schemas');
+
+            proc.wait_async(null, (self, task) => {
+                let res = proc.wait_finish(task);
+                if(!res)
+                    return reject('glib-compile-schemas task had error');
+
+                debug(`compiled glib schemas: ${path}`);
+                resolve();
+            });
+        });
+    }
+
+    _onReadFileCompleted(gioFile, task, isJSON, cb)
+    {
+        let json = null;
+        let [res, contents] = gioFile.load_contents_finish(task);
+
+        if(res && contents) {
+            if(isJSON) {
+                if(contents instanceof Uint8Array)
+                    contents = ByteArray.toString(contents);
+
+                try { json = JSON.parse(contents); }
+                catch(e) { debug(e); }
+            }
+            else {
+                json = String(contents);
+            }
+        }
+
+        if(contents)
+            GLib.free(contents);
+
+        cb(json);
     }
 
     _onSaveFileCompleted(gioFile, task, cb)

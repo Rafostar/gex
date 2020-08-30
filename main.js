@@ -1,4 +1,4 @@
-pkg.version = '0.2.0';
+pkg.version = '0.2.1';
 
 const Gex = imports.src.gex;
 const Helper = imports.src.helper;
